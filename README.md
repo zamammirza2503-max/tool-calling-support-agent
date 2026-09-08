@@ -1,4 +1,4 @@
-# Tool-Calling Support Agent
+# Tool Calling Support Agent
 
 A compact customer-support agent demonstrating **LLM tool calling** with the OpenAI Responses API.
 
