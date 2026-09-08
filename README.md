@@ -60,14 +60,3 @@ Use customer ID `C001` in the sidebar and try:
 - `Show my recent orders.`
 - `My order is late. Please create a support ticket.`
 
-## Interview explanation
-
-The important idea is that the LLM does **not** directly access SQLite. It receives a JSON schema describing safe tools. If it calls one, the application executes the real Python function and sends the result back to the model.
-
-This separates:
-
-1. Natural-language reasoning
-2. Application business logic
-3. Data access
-
-For production I would add authentication, authorization, audit logs, rate limits, idempotency, tool-level permissions, retries, and a real database/service layer.
