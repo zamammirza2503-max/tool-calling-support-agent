@@ -1,0 +1,9 @@
+flowchart TD
+A[Customer] --> B[Support Agent]
+B --> C{Need business data?}
+C -->|Yes| D[Function Tool]
+D --> E[(SQLite)]
+E --> D
+D --> B
+C -->|No| F[Answer]
+B --> F
