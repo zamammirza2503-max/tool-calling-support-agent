@@ -1,47 +1,89 @@
-import os
+import json
 
 import streamlit as st
-from dotenv import load_dotenv
 
-from agent import SupportAgent
-from database import init_db
+import database as db
+from agent import ProjectAgent
+from llm import friendly_error
 
-load_dotenv()
-init_db()
+st.set_page_config(page_title="Electrical Project Assistant", page_icon="🔌", layout="wide")
+db.init_db()
 
-st.set_page_config(page_title="Tool-Calling Support Agent")
-st.title("Tool-Calling Support Agent")
-st.caption("LLM + function calling + SQLite business tools.")
+st.title("🔌 Electrical Project Assistant")
+st.caption(
+    f"Tool-calling agent demo for the fictional project **{db.PROJECT}**. The AI cannot see the "
+    "database — it asks to call Python functions (part search, device lookup, cable checks, BOM...), "
+    "and the app runs them and returns the results."
+)
 
-customer_id = st.sidebar.selectbox("Customer", ["C001", "C002"])
+EXAMPLES = [
+    "Check all cables for protection problems.",
+    "What is -F14 and what is connected to it?",
+    "Is the voltage drop on -W13 OK?",
+    "Which devices are in cabinet 2?",
+    "I need an inverter for at least 5 A. What do we have in stock?",
+    "Create the bill of materials for CAB1.",
+    "Create a change request to fix the problem on -W14.",
+]
 
-if not os.getenv("OPENAI_API_KEY"):
-    st.warning("Set OPENAI_API_KEY in .env before using the agent.")
+with st.sidebar:
+    st.header("Demo project")
+    st.write(f"**{db.PROJECT}**")
+    st.write("Cabinets **CAB1**, **CAB2** · field devices **FIELD**")
+    st.divider()
+    st.subheader("Try asking")
+    for q in EXAMPLES:
+        if st.button(q, use_container_width=True):
+            st.session_state.pending = q
+    st.divider()
+    crs = db.list_change_requests()
+    st.subheader(f"Change requests ({len(crs)})")
+    for cr in crs:
+        st.caption(f"**CR-{cr['id']:03d}** {cr['title']} — {cr['affected_tags']} · {cr['status']}")
+    if st.button("🔄 Reset chat and demo data", use_container_width=True):
+        db.init_db(reset=True)
+        st.session_state.clear()
+        st.rerun()
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+st.session_state.setdefault("model_history", [])  # what the LLM sees
+st.session_state.setdefault("chat", [])           # what the UI shows
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.write(message["content"])
 
-user_message = st.chat_input("Ask about an order or request support")
+def show_steps(steps):
+    if not steps:
+        return
+    with st.expander(f"🔧 Agent steps: {len(steps)} tool call(s) — " + ", ".join(s["tool"] for s in steps)):
+        for n, s in enumerate(steps, start=1):
+            st.markdown(f"**{n}. `{s['tool']}`** with arguments `{s['arguments'] or '{}'}`")
+            st.code(json.dumps(s["result"], indent=2, ensure_ascii=False)[:3000], language="json")
 
-if user_message:
-    st.session_state.messages.append({"role": "user", "content": user_message})
+
+for turn in st.session_state.chat:
+    with st.chat_message(turn["role"]):
+        st.markdown(turn["content"])
+        show_steps(turn.get("steps"))
+
+prompt = st.chat_input("Ask about devices, parts, cables, checks, BOM...")
+prompt = prompt or st.session_state.pop("pending", None)
+
+if prompt:
     with st.chat_message("user"):
-        st.write(user_message)
-
-    agent = SupportAgent(
-        customer_id=customer_id,
-        model=os.getenv("OPENAI_MODEL", "gpt-5.6-luna"),
-    )
-
+        st.markdown(prompt)
     with st.chat_message("assistant"):
-        with st.spinner("The agent is checking its tools..."):
-            answer, tools_used = agent.run(user_message)
-        st.write(answer)
-        if tools_used:
-            st.caption("Tools used: " + ", ".join(tools_used))
-
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+        try:
+            with st.spinner("The agent is working with the project tools..."):
+                answer, steps, history = ProjectAgent().run(st.session_state.model_history, prompt)
+        except Exception as e:
+            st.error(friendly_error(e))
+            st.stop()
+        st.markdown(answer)
+        show_steps(steps)
+    # keep the context small, but always cut at the start of a user turn
+    recent = history[-30:]
+    while recent and recent[0].get("role") != "user":
+        recent = recent[1:]
+    st.session_state.model_history = recent
+    st.session_state.chat += [{"role": "user", "content": prompt},
+                              {"role": "assistant", "content": answer, "steps": steps}]
+    if any(s["tool"] == "create_change_request" for s in steps):
+        st.rerun()  # refresh the change request list in the sidebar
